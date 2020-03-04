@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 
 #include "CgroupBackend.hh"
+#include "Cgroup.hh"
 
 using namespace mdsd;
 using namespace std;
@@ -85,15 +86,16 @@ int main(int argc, char *argv[])
 	// 	return ret;
 	// }
 
-    auto cgroupBackend = CgroupBackend("/sys/fs/cgroup/test");
-    cgroupBackend.Available();
+    auto cgroup = Cgroup("/system.slice/mdsd.service");
 
     unsigned long long int cpu_shares = 0;
-    cgroupBackend.GetCpuShares(&cpu_shares);
-
+    cgroup.backend->GetCpuShares(&cpu_shares);
     cout << " cpu.shares="<< cpu_shares << endl;
 
-    cpu_burn();
+    unsigned long mem_kb = 0;
+    cgroup.backend->GetMemoryUsage(&mem_kb);
+    cout << " memory="<< mem_kb << " KB" << endl;
+    // cpu_burn();
 
     // pid_t mem_process_pid = create_proc_mem_alloc(50);
     // pid_t cpu_burn_pid = create_proc_cpu_burn();

@@ -13,16 +13,13 @@ namespace mdsd {
 class Cgroup
 {
 public:
-    Cgroup(const std::string &path): path(path) {
-        backend = new CgroupBackend(path);
-    }
-    ~Cgroup() { delete backend; }
+    Cgroup(const std::string &cgroupPath);
+    ~Cgroup();
 
-    int DetectMounts();
 
-private:
-    const std::string path;
     CgroupBackend *backend;
+private:
+    const std::string cgpath;
     
 };
 

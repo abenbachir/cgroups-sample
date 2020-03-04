@@ -35,7 +35,7 @@ virEnumToString(const char * const *types,
                 unsigned int ntypes,
                 int type);
 
-#define VIR_ENUM_IMPL(name, lastVal, ...) \
+#define CGROUP_ENUM_IMPL(name, lastVal, ...) \
     static const char *const name ## TypeList[] = { __VA_ARGS__ }; \
     const char *name ## TypeToString(int type) { \
         return virEnumToString(name ## TypeList, \
@@ -49,7 +49,7 @@ virEnumToString(const char * const *types,
     } \
     G_STATIC_ASSERT(G_N_ELEMENTS(name ## TypeList) == lastVal)
 
-#define VIR_ENUM_DECL(name) \
+#define CGROUP_ENUM_DECL(name) \
     const char *name ## TypeToString(int type); \
     int name ## TypeFromString(const char*type)
 
