@@ -16,6 +16,7 @@ using namespace std;
 
 #define PRINT_CHILD "[CHILD] "
 constexpr std::size_t MB        = 1024 * 1024;
+constexpr std::size_t KB        = 1024;
 constexpr std::size_t page_size = 4096;
 
 void cpu_burn()
@@ -30,11 +31,11 @@ void cpu_burn()
 static void escape(void* p) { asm volatile("" : : "g"(p) : "memory"); }
 void memory_alloc(int size_mb)
 {
-    for (size_t i = 1; i <= size_mb; i+=5)
+    for (size_t i = 1; i <= size_mb; i+=1)
     {
         char* buf;
         {
-            buf = (char*)calloc(MB, sizeof(char)); // alloc 1 MB
+            buf = (char*)calloc(MB, sizeof(char));
             for (size_t i = 0; i < MB; i += page_size)
                 buf[i] = 0;
             buf[MB - 1] = 0;
@@ -86,25 +87,41 @@ int main(int argc, char *argv[])
 	// 	return ret;
 	// }
 
-    auto cgroup = Cgroup("/system.slice/mdsd.service");
+    auto cgroup = Cgroup("/test3");
 
-    unsigned long long int cpu_shares = 0;
-    cgroup.backend->GetCpuShares(&cpu_shares);
-    cout << " cpu.shares="<< cpu_shares << endl;
+    unsigned long long mem_kb = 0;
+    cgroup.backend->GetMemoryHardLimit(&mem_kb);
+    cout << "   memory.max="<< mem_kb << " KB" << endl;
 
-    unsigned long mem_kb = 0;
-    cgroup.backend->GetMemoryUsage(&mem_kb);
-    cout << " memory="<< mem_kb << " KB" << endl;
+    // set Memory to hard=20MB soft=10MB
+    cgroup.backend->SetMemoryHardLimit(KB * 20);
+    cgroup.backend->SetMemorySoftLimit(KB * 10);
+
+    mem_kb = 0;
+    cgroup.backend->GetMemoryHardLimit(&mem_kb);
+    cout << "   memory.max="<< mem_kb << " KB" << endl;
+
+    // set CPU to hard limit of 70%
+    cgroup.backend->SetCpuCfsQuota(70000);
+    cgroup.backend->SetCpuCfsPeriod(100000);
+    cout << "   cpu.quota="<< cgroup.backend->GetCpuCfsQuota() << endl;
+    cout << "   cpu.period="<< cgroup.backend->GetCpuCfsPeriod() << endl;
+
+    // Add current process to cgroup
+    cgroup.backend->AddTask(::getpid(), CGROUP_TASK_PROCESS);
+
+    // memory_alloc(40);
     // cpu_burn();
 
     // pid_t mem_process_pid = create_proc_mem_alloc(50);
-    // pid_t cpu_burn_pid = create_proc_cpu_burn();
+    pid_t cpu_burn_pid = create_proc_cpu_burn();
+    cgroup.backend->AddTask(cpu_burn_pid, CGROUP_TASK_PROCESS);
     
-    // int status;
-    // cout << "Wait for process " << cpu_burn_pid << endl;
-    // waitpid(mem_process_pid, &status, 0); 
-    // if ( WIFEXITED(status) )      
-    //     printf("Exit status of the child was %d\n", WEXITSTATUS(status));
+    int status;
+    cout << "Wait for process " << cpu_burn_pid << endl;
+    waitpid(cpu_burn_pid, &status, 0); 
+    if ( WIFEXITED(status) )   
+        printf("Exit status of the child was %d\n", WEXITSTATUS(status));
 
     // cout << "Wait for process " << cpu_burn_pid << endl;
     // waitpid(mem_process_pid, &status, 0); 

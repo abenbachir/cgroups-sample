@@ -9,9 +9,8 @@ namespace mdsd {
 
 #define CGROUP_MAX_VAL 512
 #define CGROUP_MEMORY_PARAM_UNLIMITED 9007199254740991LL /* = INT64_MAX >> 10 */
-#define VIR_DEBUG printf
 #define CGROUP_DEBUG(log) std::cout << log << std::endl
-#define CGROUP_ERROR(error) std::cerr << error << std::endl
+#define CGROUP_ERROR(error) std::cerr << "ERROR: " << error << std::endl
 
 enum {
     CGROUP_CONTROLLER_CPU,
@@ -76,12 +75,13 @@ public:
     int ValidatePlacement();
     int DetectPlacement(const std::string &path, const std::string &controllers, const std::string &selfpath);
 
-    int SetCpuShares(unsigned long long shares);
-    int GetCpuShares(unsigned long long *shares);
+    int AddTask(pid_t pid, unsigned int flags);
+    int HasEmptyTasks(int controller);
+
 
     int ParseControllersFile();
     int DetectControllers(int controllers, int alreadyDetected);
-    bool HasController(int controller);
+    bool HasController(int controller = 0);
     int GetPathOfController(int controller, const std::string &key, std::string *path);
 
     int SetCgroupValueU64(int controller, const std::string &key, unsigned long long int value);
@@ -98,6 +98,12 @@ public:
     int FileReadAll(const std::string &path, std::string &output);
     int FileWriteStr(const std::string &path, const std::string &buffer);
 
+    int SetCpuShares(unsigned long long shares);
+    int SetCpuCfsPeriod(unsigned long long cfs_period);
+    int SetCpuCfsQuota(long long cfs_quota);
+    unsigned long long GetCpuShares();
+    unsigned long long GetCpuCfsPeriod();
+    long long GetCpuCfsQuota();
 
     int SetMemory(unsigned long long kb);
     int GetMemoryStat(unsigned long long *cache,
@@ -114,6 +120,11 @@ public:
     int SetMemSwapHardLimit(unsigned long long kb);
     int GetMemSwapHardLimit(unsigned long long *kb);
     int GetMemSwapUsage(unsigned long long *kb);
+    
+
+protected:
+    int SetMemoryLimit(const std::string &keylimit, unsigned long long kb);
+    int GetMemoryLimit(const std::string &keylimit, unsigned long long *kb);
 
 private:
     const char* PROC_MOUNTS_PATH = "/proc/mounts";

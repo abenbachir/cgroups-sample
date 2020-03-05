@@ -25,6 +25,17 @@
 #include <cctype>
 #include <locale>
 
+
+using namespace mdsd;
+namespace fs = std::experimental::filesystem;
+
+CGROUP_ENUM_DECL(CgroupV2Controller);
+CGROUP_ENUM_IMPL(CgroupV2Controller,
+              CGROUP_CONTROLLER_LAST,
+              "cpu", "cpuacct", "cpuset", "memory", "devices",
+              "freezer", "io", "net_cls", "pids", "rdma", "perf_event", "name=systemd",
+);
+
 // trim from start (in place)
 static inline void ltrim(std::string &s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
@@ -56,15 +67,23 @@ static void SplitString(const std::string& str, Container& cont, const std::stri
     cont.push_back(str.substr(previous, current - previous));
 }
 
-using namespace mdsd;
-namespace fs = std::experimental::filesystem;
+static std::string serialize_fileperms(const fs::perms &p)
+{
+    std::stringstream buf;
+    buf << ((p & fs::perms::owner_read) != fs::perms::none ? "r" : "-")
+        << ((p & fs::perms::owner_write) != fs::perms::none ? "w" : "-")
+        << ((p & fs::perms::owner_exec) != fs::perms::none ? "x" : "-")
+        << ((p & fs::perms::group_read) != fs::perms::none ? "r" : "-")
+        << ((p & fs::perms::group_write) != fs::perms::none ? "w" : "-")
+        << ((p & fs::perms::group_exec) != fs::perms::none ? "x" : "-")
+        << ((p & fs::perms::others_read) != fs::perms::none ? "r" : "-")
+        << ((p & fs::perms::others_write) != fs::perms::none ? "w" : "-")
+        << ((p & fs::perms::others_exec) != fs::perms::none ? "x" : "-")
+        << std::endl;
+    return buf.str();
+}
 
-CGROUP_ENUM_DECL(CgroupV2Controller);
-CGROUP_ENUM_IMPL(CgroupV2Controller,
-              CGROUP_CONTROLLER_LAST,
-              "cpu", "cpuacct", "cpuset", "memory", "devices",
-              "freezer", "io", "net_cls", "pids", "rdma", "perf_event", "name=systemd",
-);
+
 
 CgroupBackend::CgroupBackend()
 {
@@ -97,12 +116,16 @@ void CgroupBackend::Init()
 
 int CgroupBackend::FileReadAll(const std::string &path, std::string &output)
 {
-    std::ifstream file(path, std::fstream::in);
-    if (!file.good())
+    fs::file_status status = fs::status(path);
+    if (!fs::exists(status))
     {
-        CGROUP_ERROR("This path '" << path << "' was not found");
+        CGROUP_ERROR("File '" << path << "' not found");
         return -1;
     }
+    // TODO: check if current user has READ permission to file in path
+    CGROUP_DEBUG("[FileReadAll] File '" << path << "' has perm=" << serialize_fileperms(status.permissions()));
+
+    std::ifstream file(path, std::fstream::in);
     getline(file, output, '\n');
     file.close();
     return 0;
@@ -113,9 +136,19 @@ int CgroupBackend::FileWriteStr(const std::string &path, const std::string &buff
     int ret = 0;
     try
     {
-        std::ofstream out(path, std::fstream::out);
-        out << buffer;
-        out.close();
+        fs::file_status status = fs::status(path);
+        // TODO: check if current user has WRITE permission to file in path
+        CGROUP_DEBUG("[FileWriteStr] File '" << path << "' has perm=" << serialize_fileperms(status.permissions()));
+
+        if (!fs::exists(status))
+        {
+            CGROUP_ERROR("File '" << path << "' not found");
+            return -1;
+        }
+        
+        std::ofstream file(path, std::fstream::out);
+        file << buffer;
+        file.close();
     }
     catch(const std::exception& e)
     {
@@ -249,14 +282,25 @@ int CgroupBackend::ValidatePlacement()
     return 0;
 }
 
-int CgroupBackend::SetCpuShares(unsigned long long shares)
+int CgroupBackend::AddTask(pid_t pid, unsigned int flags)
 {
-    return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", shares);
+    if (flags & CGROUP_TASK_THREAD)
+        return SetCgroupValueI64(0, "cgroup.threads", pid);
+    else
+        return SetCgroupValueI64(0, "cgroup.procs", pid);
 }
 
-int CgroupBackend::GetCpuShares(unsigned long long *shares)
+int CgroupBackend::HasEmptyTasks(int controller = 0)
 {
-    return GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", shares);
+    int ret = -1;
+    std::string content;
+
+    ret = GetCgroupValueStr(controller, "cgroup.procs", &content);
+
+    if (ret == 0 && content == "")
+        ret = 1;
+
+    return ret;
 }
 
 int CgroupBackend::SetCgroupValueU64(int controller, const std::string& key, unsigned long long int value)
@@ -406,7 +450,7 @@ bool CgroupBackend::HasController(int controller)
 int CgroupBackend::GetPathOfController(int controller, const std::string &key, std::string *path)
 {
     if (!HasController(controller)) {
-        CGROUP_ERROR("v2 controller '" << CgroupV2ControllerTypeToString(controller) << "' is not available");
+        CGROUP_ERROR("Controller '" << CgroupV2ControllerTypeToString(controller) << "' is not available");
         return -1;
     }
 
@@ -415,26 +459,157 @@ int CgroupBackend::GetPathOfController(int controller, const std::string &key, s
     buildPath /= key;
 
     *path = buildPath;
-    CGROUP_DEBUG("GetPathOfController:() path=" << *path);
 
     return 0;
 }
 
+
+//////  CPU   //////
+
+
+int CgroupBackend::SetCpuShares(unsigned long long shares)
+{
+    return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", shares);
+}
+
+int CgroupBackend::SetCpuCfsPeriod(unsigned long long cfs_period)
+{
+    std::string str;
+
+    /* The cfs_period should be greater or equal than 1ms, and less or equal
+     * than 1s.
+     */
+    if (cfs_period < 1000 || cfs_period > 1000000) {
+        CGROUP_ERROR("cfs_period '" << cfs_period << "' must be in range (1000, 1000000)");
+        return -1;
+    }
+
+    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0) {
+        return -1;
+    }
+
+    std::vector<std::string> strList;
+    SplitString(str, strList, " ");
+
+    if (strList.size() <= 1) {
+        CGROUP_ERROR("Invalid 'cpu.max' data.");
+        return -1;
+    }
+
+    std::string value = strList[0] + " " + std::to_string(cfs_period);
+
+    return SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", value);
+}
+
+int CgroupBackend::SetCpuCfsQuota(long long cfs_quota)
+{
+    /* The cfs_quota should be greater or equal than 1ms */
+    if (cfs_quota >= 0 &&
+        (cfs_quota < 1000 ||
+         cfs_quota > ULLONG_MAX / 1000)) {
+        CGROUP_ERROR("cfs_quota '" << cfs_quota << "' must be in range (1000, " << ULLONG_MAX / 1000 <<")");
+        return -1;
+    }
+
+    if (cfs_quota == ULLONG_MAX / 1000) {
+        return SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", "max");
+    }
+
+    return SetCgroupValueI64(CGROUP_CONTROLLER_CPU, "cpu.max", cfs_quota);
+}
+
+unsigned long long CgroupBackend::GetCpuShares()
+{
+    unsigned long long value;
+    if(GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", &value) < 0)
+        return -1;
+    return value;
+}
+
+unsigned long long CgroupBackend::GetCpuCfsPeriod()
+{
+    std::string str;
+
+    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0)
+        return -1;
+
+    std::vector<std::string> strList;
+    SplitString(str, strList, " ");
+
+    if (strList.size() <= 1) {
+        CGROUP_ERROR("Invalid 'cpu.max' data.");
+        return -1;
+    }
+
+    return std::stoull(strList[1]);;
+}
+
+long long CgroupBackend::GetCpuCfsQuota()
+{
+    std::string str;
+
+    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0)
+        return -1;
+    
+    if (strncmp(str.c_str(), "max", 3) == 0) {
+        return ULLONG_MAX / 1000;
+    }
+
+    std::vector<std::string> strList;
+    SplitString(str, strList, " ");
+
+    if (strList.size() <= 1) {
+        CGROUP_ERROR("Invalid 'cpu.max' data.");
+        return -1;
+    }
+
+    return stoll(strList[0]);
+}
+
+
 ////// Memory //////
-int CgroupBackend::SetMemory(unsigned long long kb)
+
+int CgroupBackend::SetMemoryLimit(const std::string &keylimit, unsigned long long kb)
 {
     unsigned long long maxkb = CGROUP_MEMORY_PARAM_UNLIMITED;
 
     if (kb > maxkb) {
-        CGROUP_ERROR("Memory '" << kb <<"' must be less than " << maxkb);
+        CGROUP_ERROR("Memory '" << kb << "' must be less than " << maxkb);
         return -1;
     }
 
     if (kb == maxkb) {
-        return SetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, "memory.max", "max");
+        return SetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit, "max");
     } else {
-        return SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, "memory.max", kb << 10);
+        return SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, kb << 10);
     }
+}
+
+int CgroupBackend::GetMemoryLimit(const std::string &keylimit, unsigned long long *kb)
+{
+    unsigned long long value;
+    std::string strval;
+
+    if (GetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit, &strval) < 0)
+        return -1;
+
+    if (strval == "max") {
+        *kb = CGROUP_MEMORY_PARAM_UNLIMITED;
+        return 0;
+    }
+
+    value = std::stoull(strval);
+
+    *kb = value >> 10;
+    if (*kb >= CGROUP_MEMORY_PARAM_UNLIMITED)
+        *kb = CGROUP_MEMORY_PARAM_UNLIMITED;
+
+    return 0;
+}
+
+int CgroupBackend::SetMemory(unsigned long long kb)
+{
+    return SetMemoryLimit("memory.max", kb);
 }
 int CgroupBackend::GetMemoryStat(unsigned long long *cache,
                         unsigned long long *activeAnon,
@@ -445,6 +620,7 @@ int CgroupBackend::GetMemoryStat(unsigned long long *cache,
 {
     return 0;
 }
+
 int CgroupBackend::GetMemoryUsage(unsigned long *kb)
 {
     unsigned long long usage_in_bytes;
@@ -456,29 +632,37 @@ int CgroupBackend::GetMemoryUsage(unsigned long *kb)
 }
 int CgroupBackend::SetMemoryHardLimit(unsigned long long kb)
 {
-    return 0;
+    return SetMemoryLimit("memory.max", kb);
 }
 int CgroupBackend::GetMemoryHardLimit(unsigned long long *kb)
 {
-    return 0;
+    return GetMemoryLimit("memory.max", kb);
 }
+
 int CgroupBackend::SetMemorySoftLimit(unsigned long long kb)
 {
-    return 0;
+    return SetMemoryLimit("memory.high", kb);
 }
+
 int CgroupBackend::GetMemorySoftLimit(unsigned long long *kb)
 {
-    return 0;
+    return GetMemoryLimit("memory.high", kb);
 }
+
 int CgroupBackend::SetMemSwapHardLimit(unsigned long long kb)
 {
-    return 0;
+    return SetMemoryLimit("memory.swap.max", kb);
 }
 int CgroupBackend::GetMemSwapHardLimit(unsigned long long *kb)
 {
-    return 0;
+    return GetMemoryLimit("memory.swap.max", kb);
 }
 int CgroupBackend::GetMemSwapUsage(unsigned long long *kb)
 {
-    return 0;
+    unsigned long long usage_in_bytes;
+    int ret = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY,
+                                   "memory.swap.current", &usage_in_bytes);
+    if (ret == 0)
+        *kb = (unsigned long) usage_in_bytes >> 10;
+    return ret;
 }
