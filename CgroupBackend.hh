@@ -9,10 +9,12 @@ namespace mdsd {
 
 #define CGROUP_MAX_VAL 512
 #define CGROUP_MEMORY_PARAM_UNLIMITED 9007199254740991LL /* = INT64_MAX >> 10 */
-#define CGROUP_DEBUG(log) std::cout << log << std::endl
+// #define CGROUP_DEBUG(log) std::cout << log << std::endl
+#define CGROUP_DEBUG(log)
 #define CGROUP_ERROR(error) std::cerr << "ERROR: " << error << std::endl
 
 enum {
+    CGROUP_CONTROLLER_NONE = 0,
     CGROUP_CONTROLLER_CPU,
     CGROUP_CONTROLLER_CPUACCT,
     CGROUP_CONTROLLER_CPUSET,
@@ -26,12 +28,12 @@ enum {
     CGROUP_CONTROLLER_PERF_EVENT,
     CGROUP_CONTROLLER_SYSTEMD,
 
-    CGROUP_CONTROLLER_LAST
+    CGROUP_CONTROLLER_LAST,
 } CgroupController;
 
 typedef enum {
     CGROUP_NONE = 0, /* create subdir under each cgroup if possible. */
-    CGROUP_MEM_HIERACHY = 1 << 0, /* call virCgroupSetMemoryUseHierarchy
+    CGROUP_MEM_HIERACHY = 1 << 0, /* call SetMemoryUseHierarchy
                                        * before creating subcgroups and
                                        * attaching tasks
                                        */
@@ -75,8 +77,14 @@ public:
     int ValidatePlacement();
     int DetectPlacement(const std::string &path, const std::string &controllers, const std::string &selfpath);
 
-    int AddTask(pid_t pid, unsigned int flags);
-    int HasEmptyTasks(int controller);
+    int AddTask(pid_t pid, unsigned int taskflags = CGROUP_TASK_PROCESS);
+    int HasEmptyTasks(int controller = CGROUP_CONTROLLER_NONE);
+
+    int SetOwner(uid_t uid, gid_t gid, int controllers = 0);
+    int Remove();
+    int MakeGroup(unsigned int flags = CGROUP_NONE);
+    int EnableSubtreeControllerCgroupV2(int controller);
+    int DisableSubtreeControllerCgroupV2(int controller);
 
 
     int ParseControllersFile();
@@ -119,14 +127,17 @@ public:
     int GetMemorySoftLimit(unsigned long long *kb);
     int SetMemSwapHardLimit(unsigned long long kb);
     int GetMemSwapHardLimit(unsigned long long *kb);
-    int GetMemSwapUsage(unsigned long long *kb);
-    
+    int GetMemSwapUsage(unsigned long long *kb);    
 
+// helpers
+    std::string GetBasePath();
+    bool IsCgroupCreated();
 protected:
     int SetMemoryLimit(const std::string &keylimit, unsigned long long kb);
     int GetMemoryLimit(const std::string &keylimit, unsigned long long *kb);
 
 private:
+    const CgroupBackendType backendType = CGROUP_BACKEND_TYPE_V2;
     const char* PROC_MOUNTS_PATH = "/proc/mounts";
     std::string mountPoint;
     std::string placement;

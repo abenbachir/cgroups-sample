@@ -29,10 +29,11 @@
 using namespace mdsd;
 namespace fs = std::experimental::filesystem;
 
+/* this should match the enum CgroupController */
 CGROUP_ENUM_DECL(CgroupV2Controller);
 CGROUP_ENUM_IMPL(CgroupV2Controller,
               CGROUP_CONTROLLER_LAST,
-              "cpu", "cpuacct", "cpuset", "memory", "devices",
+              "", "cpu", "cpuacct", "cpuset", "memory", "devices",
               "freezer", "io", "net_cls", "pids", "rdma", "perf_event", "name=systemd",
 );
 
@@ -85,14 +86,29 @@ static std::string serialize_fileperms(const fs::perms &p)
 
 
 
-CgroupBackend::CgroupBackend()
+CgroupBackend::CgroupBackend() : controllers(CGROUP_CONTROLLER_NONE)
 {
     this->Init();
 }
 
-CgroupBackend::CgroupBackend(const std::string &placement): placement(placement) 
+CgroupBackend::CgroupBackend(const std::string &placement)
+    : placement(placement), controllers(CGROUP_CONTROLLER_NONE)
 {
     this->Init();
+}
+
+std::string CgroupBackend::GetBasePath()
+{
+    fs::path base(this->mountPoint);
+    base /= this->placement;
+
+    return base;
+}
+
+bool CgroupBackend::IsCgroupCreated()
+{
+    fs::file_status status = fs::status(this->GetBasePath());
+    return fs::exists(status);
 }
 
 void CgroupBackend::Init()
@@ -209,8 +225,7 @@ int CgroupBackend::DetectMounts(const char *mntType, const char *mntOpts, const 
         return 0;
 
     this->mountPoint = std::string(mntDir);
-
-    CGROUP_DEBUG("mountPoint=" << mountPoint);
+    // CGROUP_DEBUG("mountPoint=" << mountPoint);
 
     return 0;
 }
@@ -282,15 +297,15 @@ int CgroupBackend::ValidatePlacement()
     return 0;
 }
 
-int CgroupBackend::AddTask(pid_t pid, unsigned int flags)
+int CgroupBackend::AddTask(pid_t pid, unsigned int taskflags)
 {
-    if (flags & CGROUP_TASK_THREAD)
-        return SetCgroupValueI64(0, "cgroup.threads", pid);
+    if (taskflags & CGROUP_TASK_THREAD)
+        return SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.threads", pid);
     else
-        return SetCgroupValueI64(0, "cgroup.procs", pid);
+        return SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.procs", pid);
 }
 
-int CgroupBackend::HasEmptyTasks(int controller = 0)
+int CgroupBackend::HasEmptyTasks(int controller)
 {
     int ret = -1;
     std::string content;
@@ -301,6 +316,156 @@ int CgroupBackend::HasEmptyTasks(int controller = 0)
         ret = 1;
 
     return ret;
+}
+
+int CgroupBackend::SetOwner(uid_t uid, gid_t gid, int controllers)
+{
+    auto base = this->GetBasePath();
+    
+    // Change ownership of all regular files in a directory. 
+    for (const auto & entry : fs::directory_iterator(base))
+    {
+        auto status = fs::status(entry.path());
+        if (fs::is_regular_file(status) && chown(entry.path().c_str(), uid, gid) < 0) {
+            CGROUP_ERROR("errno:" << errno << ", cannot chown '"<< entry.path()
+                        <<"' to (" << uid << ", " << gid << ")");
+            return -1;
+        }
+    }
+
+    // Change ownership of the cgroup directory.
+    if (chown(base.c_str(), uid, gid) < 0) {
+        CGROUP_ERROR("errno:" << errno << ", cannot chown '"<< base 
+                <<"' to (" << uid << ", " << gid << ")");
+        return -1;
+    }
+
+    return 0;
+}
+
+int CgroupBackend::Remove()
+{
+    /* Don't delete the root group, if we accidentally
+       ended up in it for some reason */
+    if (this->placement == "/" || this->placement == "")
+        return 0;
+
+    try
+    {
+        fs::path grppath = this->GetBasePath();
+        std::uintmax_t n = fs::remove_all(grppath);
+        this->controllers = 0;
+        CGROUP_DEBUG("Deleted " << n << " files or directories here " << grppath);
+    }
+    catch(const std::exception& e)
+    {
+        CGROUP_ERROR(e.what());
+        return -1;
+    }
+    
+    return 0;
+}
+
+
+/**
+ * EnableSubtreeControllerCgroupV2:
+ *
+ * Returns: -1 on fatal error
+ *          -2 if we failed to write into cgroup.subtree_control
+ *          0 on success
+ */
+int CgroupBackend::EnableSubtreeControllerCgroupV2(int controller)
+{
+    std::string path;
+    std::string val = std::string("+") + CgroupV2ControllerTypeToString(controller);
+
+    if (GetPathOfController(controller, "cgroup.subtree_control", &path) < 0) {
+        return -1;
+    }
+
+    CGROUP_DEBUG("Enable sub controller '" << val << "' for '" << path << "', has controller: " << HasController(controller));
+    if (FileWriteStr(path, val) < 0) {
+        CGROUP_ERROR(errno << " Failed to enable controller '" << val << "' for '" << path << "'");
+        return -2;
+    }
+
+    return 0;
+}
+
+/**
+ * EnableSubtreeControllerCgroupV2:
+ *
+ * Returns: -1 on fatal error
+ *          -2 if we failed to write into cgroup.subtree_control
+ *          0 on success
+ */
+int CgroupBackend::DisableSubtreeControllerCgroupV2(int controller)
+{
+    std::string path;
+    std::string val = std::string("-") + CgroupV2ControllerTypeToString(controller);
+
+    if (GetPathOfController(controller, "cgroup.subtree_control", &path) < 0) {
+        return -1;
+    }
+
+    if (FileWriteStr(path, val) < 0) {
+        CGROUP_ERROR(errno << " Failed to disable controller '" << val << "' for '" << path << "'");
+        return -2;
+    }
+
+    return 0;
+}
+
+int CgroupBackend::MakeGroup(unsigned int flags)
+{
+    fs::path path(this->GetBasePath());
+    int controller;
+
+    if (flags & CGROUP_SYSTEMD) {
+        CGROUP_DEBUG("Running with systemd so we should not create cgroups ourselves.");
+        return 0;
+    }
+
+    CGROUP_DEBUG("Make group " << path << " perms:"  << static_cast<int>(fs::perms::all));
+
+    auto fstatus = fs::status(path);
+    
+    if (!fs::exists(fstatus) && !fs::create_directory(path)) {
+        CGROUP_ERROR(errno << "Failed to create v2 cgroup " << path);
+        return -1;
+    }
+
+    auto parent = CgroupBackend(path.parent_path());
+    parent.ParseControllersFile();
+
+    for (size_t controller = 0; controller < CGROUP_CONTROLLER_LAST; controller++)
+    {
+        int rc;
+        // if parent does not have the controller, then skip
+        if (!parent.HasController(controller) || this->HasController(controller))
+            continue;
+
+        /* Controllers that are implicitly enabled if available. */
+        if (controller == CGROUP_CONTROLLER_CPUACCT || controller == CGROUP_CONTROLLER_DEVICES)
+            continue;
+        
+        rc = parent.EnableSubtreeControllerCgroupV2(controller);
+        if (rc < 0) {
+            if (rc == -2) {
+                CGROUP_DEBUG("failed to enable '" << CgroupV2ControllerTypeToString(controller) << "' controller, skipping" );
+                this->controllers &= ~(1 << controller);
+                continue;
+            }
+
+            CGROUP_ERROR("failed to enable '" << CgroupV2ControllerTypeToString(controller) << "' controller, exiting" );
+            return -1;
+        }
+    }
+
+    // re-update controllers
+    this->ParseControllersFile();
+
+    return 0;
 }
 
 int CgroupBackend::SetCgroupValueU64(int controller, const std::string& key, unsigned long long int value)
@@ -391,13 +556,13 @@ int CgroupBackend::GetCgroupValueRaw(const std::string &path, std::string* value
 
 int CgroupBackend::ParseControllersFile()
 {
-    int rc;
     std::string controllerStr;
     std::vector<std::string> controllerList;
-    char **tmp;
 
-    fs::path controllerFile = this->mountPoint;
-    controllerFile /= this->placement;
+    if (!this->IsCgroupCreated())
+        return 0;
+
+    fs::path controllerFile(this->GetBasePath());
     controllerFile /= "cgroup.controllers";
 
     if (FileReadAll(controllerFile, controllerStr) < 0)
@@ -410,6 +575,7 @@ int CgroupBackend::ParseControllersFile()
     if (controllerList.empty())
         return -1;
 
+    this->controllers = CGROUP_CONTROLLER_NONE; // reset
     for (int i = 0; i < controllerList.size(); i++)
     {
         int type = CgroupV2ControllerTypeFromString(controllerList[i].c_str());
@@ -449,13 +615,12 @@ bool CgroupBackend::HasController(int controller)
 
 int CgroupBackend::GetPathOfController(int controller, const std::string &key, std::string *path)
 {
-    if (!HasController(controller)) {
+    if (controller != CGROUP_CONTROLLER_NONE && !HasController(controller)) {
         CGROUP_ERROR("Controller '" << CgroupV2ControllerTypeToString(controller) << "' is not available");
         return -1;
     }
 
-    fs::path buildPath = this->mountPoint;
-    buildPath /= this->placement;
+    fs::path buildPath(this->GetBasePath());
     buildPath /= key;
 
     *path = buildPath;
