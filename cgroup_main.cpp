@@ -102,7 +102,7 @@ int main(int argc, char *argv[])
 	// 	return ret;
 	// }
 
-    auto cgroup = Cgroup("/test-group/nested-group");
+    auto cgroup = Cgroup("/test-group");
 
     cgroup.backend->Remove();
 
@@ -142,6 +142,7 @@ int main(int argc, char *argv[])
 
     // pid_t mem_process_pid = create_proc_mem_alloc(50);
     // pid_t cpu_burn_pid = create_proc_cpu_burn();
+
     cgroup.backend->AddTask(create_proc_cpu_burn());
     cgroup.backend->AddTask(create_proc_cpu_burn());
     cgroup.backend->AddTask(create_proc_cpu_burn());

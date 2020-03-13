@@ -7,10 +7,11 @@
 #ifndef __ENUM_HH__
 #define __ENUM_HH__
 
-#include <string.h> 
+#include <vector>
+#include <string>
+using namespace std;
 
 #define G_N_ELEMENTS(Array) (sizeof(Array) / sizeof(*(Array)))
-#define STREQ(a, b) (strcmp(a, b) == 0)
 #define NULLSTR(s) ((s) ? (s) : "<null>")
 
 #if (4 < __GNUC__ + (6 <= __GNUC_MINOR__) \
@@ -25,33 +26,41 @@
 # define G_GNUC_UNUSED __attribute__((__unused__))
 #endif
 
-int
-virEnumFromString(const char * const *types,
-                  unsigned int ntypes,
-                  const char *type);
+int EnumFromString(const vector<string>& types, const string& type);
 
-const char *
-virEnumToString(const char * const *types,
-                unsigned int ntypes,
-                int type);
+string EnumToString(const vector<string>& types, int type);
 
+// int
+// virEnumFromString(const char * const *types,
+//                   unsigned int ntypes,
+//                   const char *type);
+
+// const char *
+// virEnumToString(const char * const *types,
+//                 unsigned int ntypes,
+//                 int type);
+
+// // __VA_ARGS__
 #define CGROUP_ENUM_IMPL(name, lastVal, ...) \
-    static const char *const name ## TypeList[] = { __VA_ARGS__ }; \
-    const char *name ## TypeToString(int type) { \
-        return virEnumToString(name ## TypeList, \
-                               G_N_ELEMENTS(name ## TypeList), \
-                               type); \
+    static vector<string> name ## TypeList = { __VA_ARGS__ }; \
+    string name ## TypeToString(int type) { \
+        return EnumToString(name ## TypeList, type); \
     } \
-    int name ## TypeFromString(const char *type) { \
-        return virEnumFromString(name ## TypeList, \
-                                 G_N_ELEMENTS(name ## TypeList), \
-                                 type); \
-    } \
-    G_STATIC_ASSERT(G_N_ELEMENTS(name ## TypeList) == lastVal)
+    int name ## TypeFromString(const string& type) { \
+        return EnumFromString(name ## TypeList, type); \
+    }
+    // G_STATIC_ASSERT(name ## TypeList.size() == lastVal)
 
-#define CGROUP_ENUM_DECL(name) \
-    const char *name ## TypeToString(int type); \
-    int name ## TypeFromString(const char*type)
+#define CGROUP_ENUM_DECL(name)
+// #define CGROUP_ENUM_DECL(name) \
+//     string name ## TypeToString(int type); \
+//     int name ## TypeFromString(const string& type)
 
+
+// CGROUP_ENUM_IMPL(CgroupV1Controller,
+//               CGROUP_CONTROLLER_LAST,
+//               "", "cpu", "cpuacct", "cpuset", "memory", "devices",
+//               "freezer", "blkio", "net_cls", "pids", "rdma", "perf_event", "name=systemd",
+// );
 
 #endif // __CGROUPBACKEND_HH__

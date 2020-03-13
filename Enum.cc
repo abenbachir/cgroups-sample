@@ -1,29 +1,24 @@
 #include "Enum.hh"
 
-int
-virEnumFromString(const char * const *types,
-                  unsigned int ntypes,
-                  const char *type)
-{
-    size_t i;
-    if (!type)
-        return -1;
+#include <vector>
+#include <string>
+using namespace std;
 
-    for (i = 0; i < ntypes; i++)
-        if (strcmp(types[i], type) == 0)
+
+int EnumFromString(const vector<string>& types, const string& type)
+{
+    for (size_t i = 0; i < types.size(); i++)
+        if (types[i] == type)
             return i;
 
     return -1;
 }
 
-
-const char *
-virEnumToString(const char * const *types,
-                unsigned int ntypes,
-                int type)
+string EnumToString(const vector<string>& types, int type)
 {
-    if (type < 0 || type >= ntypes)
+    if (type < 0 || type >= types.size())
         return NULL;
 
     return types[type];
 }
+

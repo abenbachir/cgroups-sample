@@ -1,5 +1,7 @@
 #include "Cgroup.hh"
 #include "CgroupBackend.hh"
+#include "CgroupBackendV2.hh"
+#include "CgroupBackendV1.hh"
 #include "Enum.hh"
 
 #include <unistd.h>
@@ -19,7 +21,8 @@ using namespace mdsd;
 
 Cgroup::Cgroup(const std::string &cgroupPath): cgpath(cgroupPath)
 {
-    backend = new CgroupBackend(cgpath);
+    backend = new CgroupBackendV1(cgpath);
+    backend->Init();
 }
 
 Cgroup::~Cgroup()
