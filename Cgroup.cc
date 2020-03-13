@@ -19,15 +19,13 @@
 using namespace mdsd;
 
 
-Cgroup::Cgroup(const std::string &cgroupPath): cgpath(cgroupPath)
+Cgroup::Cgroup(const std::shared_ptr<CgroupBackend>& backend): backend(backend)
 {
-    backend = new CgroupBackendV1(cgpath);
     backend->Init();
 }
 
 Cgroup::~Cgroup()
 {
-    delete backend;
 }
 
 

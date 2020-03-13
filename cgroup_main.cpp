@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "CgroupBackend.hh"
+#include "CgroupBackendFactory.hh"
 #include "Cgroup.hh"
 
 using namespace mdsd;
@@ -93,6 +94,7 @@ pid_t create_proc_mem_alloc(int size_mb)
 int main(int argc, char *argv[])
 {
     int ret = 0;
+    CgroupBackendFactory cgroupFactory = CgroupBackendFactory();
     
     /* initialize libcg */
     // cgroup_set_default_logger(4); // DEBUG is 4
@@ -102,40 +104,40 @@ int main(int argc, char *argv[])
 	// 	return ret;
 	// }
 
-    auto cgroup = Cgroup("/test-group");
+    auto cgroup = cgroupFactory.GetCgroup("/test-group");
 
-    cgroup.backend->Remove();
+    cgroup->backend->Remove();
 
-    cgroup.backend->MakeGroup();
+    cgroup->backend->MakeGroup();
 
     uint abder_uid = 1000;
     uint abder_gid = 1000;
     cout <<"Setup cgroup permission for user (" << abder_uid << ", " << abder_gid << ")" << endl;
-    cgroup.backend->SetOwner(abder_uid, abder_gid);
+    cgroup->backend->SetOwner(abder_uid, abder_gid);
 
-    // cgroup.backend->Remove();
+    // cgroup->backend->Remove();
     // return 0;
 
     unsigned long long mem_kb = 0;
-    cgroup.backend->GetMemoryHardLimit(&mem_kb);
+    cgroup->backend->GetMemoryHardLimit(&mem_kb);
     cout << "   memory.max="<< mem_kb << " KB" << endl;
 
     // set Memory to hard=20MB soft=10MB
-    cgroup.backend->SetMemoryHardLimit(KB * 70);
-    cgroup.backend->SetMemorySoftLimit(KB * 40);
+    cgroup->backend->SetMemoryHardLimit(KB * 70);
+    cgroup->backend->SetMemorySoftLimit(KB * 40);
 
     mem_kb = 0;
-    cgroup.backend->GetMemoryHardLimit(&mem_kb);
+    cgroup->backend->GetMemoryHardLimit(&mem_kb);
     cout << "   memory.max="<< mem_kb << " KB" << endl;
 
     // set CPU to hard limit of 70%
-    cgroup.backend->SetCpuCfsQuota(70000);
-    cgroup.backend->SetCpuCfsPeriod(100000);
-    cout << "   cpu.quota="<< cgroup.backend->GetCpuCfsQuota() << endl;
-    cout << "   cpu.period="<< cgroup.backend->GetCpuCfsPeriod() << endl;
+    cgroup->backend->SetCpuCfsQuota(70000);
+    cgroup->backend->SetCpuCfsPeriod(100000);
+    cout << "   cpu.quota="<< cgroup->backend->GetCpuCfsQuota() << endl;
+    cout << "   cpu.period="<< cgroup->backend->GetCpuCfsPeriod() << endl;
 
     // Add current process to cgroup
-    // cgroup.backend->AddTask(getpid());
+    // cgroup->backend->AddTask(getpid());
 
     // memory_alloc(40);
     // cpu_burn();
@@ -143,11 +145,11 @@ int main(int argc, char *argv[])
     // pid_t mem_process_pid = create_proc_mem_alloc(50);
     // pid_t cpu_burn_pid = create_proc_cpu_burn();
 
-    cgroup.backend->AddTask(create_proc_cpu_burn());
-    cgroup.backend->AddTask(create_proc_cpu_burn());
-    cgroup.backend->AddTask(create_proc_cpu_burn());
-    cgroup.backend->AddTask(create_proc_mem_alloc(100));
-    cgroup.backend->AddTask(create_proc_mem_alloc(100));
+    cgroup->backend->AddTask(create_proc_cpu_burn());
+    cgroup->backend->AddTask(create_proc_cpu_burn());
+    cgroup->backend->AddTask(create_proc_cpu_burn());
+    cgroup->backend->AddTask(create_proc_mem_alloc(100));
+    cgroup->backend->AddTask(create_proc_mem_alloc(100));
     
     cout << "Sleep..." << endl;
     sleep(1000);

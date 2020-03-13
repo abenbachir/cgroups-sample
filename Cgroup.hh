@@ -13,11 +13,11 @@ namespace mdsd {
 class Cgroup
 {
 public:
-    Cgroup(const std::string &cgroupPath);
+    Cgroup(const std::shared_ptr<CgroupBackend>& backend);
     ~Cgroup();
 
 
-    CgroupBackend *backend;
+    std::shared_ptr<CgroupBackend> backend;
 private:
     const std::string cgpath;
     
