@@ -36,9 +36,20 @@ CGROUP_ENUM_IMPL(CgroupV2Controller,
               "freezer", "io", "net_cls", "pids", "rdma", "perf_event", "name=systemd"
 );
 
+CGROUP_ENUM_IMPL(CgroupV2ControllerFile,
+              CGROUP_CONTROLLER_FILE_LAST,
+              "cgroup.procs", "cgroup.threads",
+              "cpu.stat", "cpu.weight", "cpu.max", "cpu.max",
+              "memory.current", "memory.max", "memory.high",
+              "memory.swap.current", "memory.swap.max", "memory.swap.high",
+);
+
 CgroupBackendV2::CgroupBackendV2(const std::string &placement)
     : placement(placement), CgroupBackend(CGROUP_BACKEND_TYPE_V2, placement)
 {
+    for (size_t i = 0; i < CGROUP_CONTROLLER_FILE_LAST; i++) {
+        backendControllerFileMap[GetBackendType()][i] = CgroupV2ControllerFileTypeToString(i);        
+    }
 }
 
 std::string CgroupBackendV2::GetBasePath(int controller)
@@ -53,6 +64,11 @@ bool CgroupBackendV2::IsCgroupCreated()
 {
     fs::file_status status = fs::status(this->GetBasePath());
     return fs::exists(status);
+}
+
+std::string CgroupBackendV2::GetControllerName(int controller)
+{
+    return CgroupV2ControllerTypeToString(controller);
 }
 
 void CgroupBackendV2::Init()
@@ -115,73 +131,33 @@ int CgroupBackendV2::ValidatePlacement()
     return 0;
 }
 
-int CgroupBackendV2::AddTask(pid_t pid, unsigned int taskflags)
+void CgroupBackendV2::AddTask(pid_t pid, unsigned int taskflags)
 {
     if (taskflags & CGROUP_TASK_THREAD)
-        return SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.threads", pid);
+        SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.threads", pid);
     else
-        return SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.procs", pid);
+        SetCgroupValueI64(CGROUP_CONTROLLER_NONE, "cgroup.procs", pid);
 }
 
-int CgroupBackendV2::HasEmptyTasks(int controller)
+bool CgroupBackendV2::HasEmptyTasks(int controller)
 {
-    int ret = -1;
-    std::string content;
+    if (GetCgroupValueStr(controller, "cgroup.procs") == "")
+        return false;
 
-    ret = GetCgroupValueStr(controller, "cgroup.procs", &content);
-
-    if (ret == 0 && content == "")
-        ret = 1;
-
-    return ret;
+    return true;
 }
 
-int CgroupBackendV2::SetOwner(uid_t uid, gid_t gid, int controllers)
-{
-    auto base = this->GetBasePath();
-    
-    // Change ownership of all regular files in a directory. 
-    for (const auto & entry : fs::directory_iterator(base))
-    {
-        auto status = fs::status(entry.path());
-        if (fs::is_regular_file(status) && chown(entry.path().c_str(), uid, gid) < 0) {
-            CGROUP_ERROR("errno:" << errno << ", cannot chown '"<< entry.path()
-                        <<"' to (" << uid << ", " << gid << ")");
-            return -1;
-        }
-    }
-
-    // Change ownership of the cgroup directory.
-    if (chown(base.c_str(), uid, gid) < 0) {
-        CGROUP_ERROR("errno:" << errno << ", cannot chown '"<< base 
-                <<"' to (" << uid << ", " << gid << ")");
-        return -1;
-    }
-
-    return 0;
-}
-
-int CgroupBackendV2::Remove()
+void CgroupBackendV2::Remove()
 {
     /* Don't delete the root group, if we accidentally
        ended up in it for some reason */
     if (this->placement == "/" || this->placement == "")
-        return 0;
+        return;
 
-    try
-    {
-        fs::path grppath = this->GetBasePath();
-        std::uintmax_t n = fs::remove_all(grppath);
-        this->controllers = 0;
-        CGROUP_DEBUG("Deleted " << n << " files or directories here " << grppath);
-    }
-    catch(const std::exception& e)
-    {
-        CGROUP_ERROR(e.what());
-        return -1;
-    }
-    
-    return 0;
+    fs::path grppath = this->GetBasePath();
+    std::uintmax_t n = fs::remove_all(grppath);
+    this->controllers = 0;
+    CGROUP_DEBUG("Deleted " << n << " files or directories here " << grppath);
 }
 
 
@@ -194,18 +170,9 @@ int CgroupBackendV2::Remove()
  */
 int CgroupBackendV2::EnableSubtreeControllerCgroupV2(int controller)
 {
-    std::string path;
-    std::string val = std::string("+") + CgroupV2ControllerTypeToString(controller);
-
-    if (GetPathOfController(controller, "cgroup.subtree_control", &path) < 0) {
-        return -1;
-    }
-
-    CGROUP_DEBUG("Enable sub controller '" << val << "' for '" << path << "', has controller: " << HasController(controller));
-    if (FileWriteStr(path, val) < 0) {
-        CGROUP_ERROR(errno << " Failed to enable controller '" << val << "' for '" << path << "'");
-        return -2;
-    }
+    std::string val = std::string("+") + GetControllerName(controller);
+    std::string path = GetPathOfController(controller, "cgroup.subtree_control");
+    FileWriteStr(path, val);
 
     return 0;
 }
@@ -219,46 +186,33 @@ int CgroupBackendV2::EnableSubtreeControllerCgroupV2(int controller)
  */
 int CgroupBackendV2::DisableSubtreeControllerCgroupV2(int controller)
 {
-    std::string path;
-    std::string val = std::string("-") + CgroupV2ControllerTypeToString(controller);
-
-    if (GetPathOfController(controller, "cgroup.subtree_control", &path) < 0) {
-        return -1;
-    }
-
-    if (FileWriteStr(path, val) < 0) {
-        CGROUP_ERROR(errno << " Failed to disable controller '" << val << "' for '" << path << "'");
-        return -2;
-    }
+    std::string val = std::string("-") + GetControllerName(controller);
+    std::string path = GetPathOfController(controller, "cgroup.subtree_control");
+    FileWriteStr(path, val);
 
     return 0;
 }
 
-int CgroupBackendV2::MakeGroup(unsigned int flags)
+void CgroupBackendV2::MakeGroup(unsigned int flags)
 {
     fs::path path(this->GetBasePath());
     int controller;
 
-    if (flags & CGROUP_SYSTEMD) {
-        CGROUP_DEBUG("Running with systemd so we should not create cgroups ourselves.");
-        return 0;
-    }
+    if (flags & CGROUP_SYSTEMD)
+        throw CGroupBaseException("Running with systemd so we should not create cgroups ourselves.");
 
     CGROUP_DEBUG("Make group " << path << " perms:"  << static_cast<int>(fs::perms::all));
 
     auto fstatus = fs::status(path);
     
-    if (!fs::exists(fstatus) && !fs::create_directory(path)) {
-        CGROUP_ERROR(errno << "Failed to create v2 cgroup " << path);
-        return -1;
-    }
+    if (!fs::exists(fstatus) && !fs::create_directory(path))
+        throw CGroupFileNotFoundException(std::to_string(errno) + "Failed to create v2 cgroup " + path.string());
 
     auto parent = CgroupBackendV2(path.parent_path());
     parent.ParseControllersFile();
 
     for (size_t controller = 0; controller < CGROUP_CONTROLLER_LAST; controller++)
     {
-        int rc;
         // if parent does not have the controller, then skip
         if (!parent.HasController(controller) || this->HasController(controller))
             continue;
@@ -267,23 +221,17 @@ int CgroupBackendV2::MakeGroup(unsigned int flags)
         if (controller == CGROUP_CONTROLLER_CPUACCT || controller == CGROUP_CONTROLLER_DEVICES)
             continue;
         
-        rc = parent.EnableSubtreeControllerCgroupV2(controller);
-        if (rc < 0) {
-            if (rc == -2) {
-                CGROUP_DEBUG("failed to enable '" << CgroupV2ControllerTypeToString(controller) << "' controller, skipping" );
-                this->controllers &= ~(1 << controller);
-                continue;
-            }
-
-            CGROUP_ERROR("failed to enable '" << CgroupV2ControllerTypeToString(controller) << "' controller, exiting" );
-            return -1;
+        try
+        {
+            parent.EnableSubtreeControllerCgroupV2(controller);
+        } catch (CGroupBaseException ex) {
+            this->controllers &= ~(1 << controller);
+            CGROUP_ERROR("failed to enable '" << GetControllerName(controller) << "' controller, error:" << ex.what());
         }
     }
 
     // re-update controllers
     this->ParseControllersFile();
-
-    return 0;
 }
 
 
@@ -298,10 +246,9 @@ int CgroupBackendV2::ParseControllersFile()
     fs::path controllerFile(this->GetBasePath());
     controllerFile /= "cgroup.controllers";
 
-    if (FileReadAll(controllerFile, controllerStr) < 0)
-        return -1;
+    controllerStr = FileReadAll(controllerFile);
 
-    CGROUP_DEBUG("Reading from controler path " << controllerFile << " => '" << controllerStr << "'");
+    CGROUP_DEBUG("Parsing controlers from path " << controllerFile << " => '" << controllerStr << "'");
     trim(controllerStr);
     splitstring(controllerStr, controllerList);
 
@@ -335,7 +282,7 @@ int CgroupBackendV2::DetectControllers(int controllers, int alreadyDetected = 0)
     this->controllers &= ~alreadyDetected;
 
     for (i = 0; i < CGROUP_CONTROLLER_LAST; i++)
-        CGROUP_DEBUG("Controller '"<< CgroupV2ControllerTypeToString(i) <<"' present=" << ((this->controllers & 1 << i) ? "yes" : "no"));
+        CGROUP_DEBUG("Controller '"<< GetControllerName(i) <<"' present=" << ((this->controllers & 1 << i) ? "yes" : "no"));
 
     return this->controllers;
 }
@@ -346,90 +293,50 @@ bool CgroupBackendV2::HasController(int controller)
     return this->controllers & (1 << controller);
 }
 
-int CgroupBackendV2::GetPathOfController(int controller, const std::string &key, std::string *path)
+std::string CgroupBackendV2::GetPathOfController(int controller, const std::string &key)
 {
-    if (controller != CGROUP_CONTROLLER_NONE && !HasController(controller)) {
-        CGROUP_ERROR("Controller '" << CgroupV2ControllerTypeToString(controller) << "' is not available");
-        return -1;
-    }
+    if (controller != CGROUP_CONTROLLER_NONE && !HasController(controller))
+        throw CGroupControllerNotFoundException("Controller '" + GetControllerName(controller) + "' is not available");
 
     fs::path buildPath(this->GetBasePath());
     buildPath /= key;
 
-    *path = buildPath;
-
-    return 0;
+    return buildPath;
 }
 
 
 //////  CPU   //////
 
-
-int CgroupBackendV2::SetCpuShares(unsigned long long shares)
+void CgroupBackendV2::SetCpuCfsPeriod(unsigned long long cfs_period)
 {
-    return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", shares);
-}
+    this->ValidateCPUCfsPeiod(cfs_period);
 
-int CgroupBackendV2::SetCpuCfsPeriod(unsigned long long cfs_period)
-{
-    std::string str;
-
-    /* The cfs_period should be greater or equal than 1ms, and less or equal
-     * than 1s.
-     */
-    if (cfs_period < 1000 || cfs_period > 1000000) {
-        CGROUP_ERROR("cfs_period '" << cfs_period << "' must be in range (1000, 1000000)");
-        return -1;
-    }
-
-    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0) {
-        return -1;
-    }
+    std::string str = GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max");
 
     std::vector<std::string> strList;
     splitstring(str, strList, " ");
-
-    if (strList.size() <= 1) {
-        CGROUP_ERROR("Invalid 'cpu.max' data.");
-        return -1;
-    }
+    if (strList.size() <= 1)
+        throw CGroupCPUException("Invalid 'cpu.max' data.");
 
     std::string value = strList[0] + " " + std::to_string(cfs_period);
 
-    return SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", value);
+    SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", value);
 }
 
-int CgroupBackendV2::SetCpuCfsQuota(long long cfs_quota)
+void CgroupBackendV2::SetCpuCfsQuota(long long cfs_quota)
 {
-    /* The cfs_quota should be greater or equal than 1ms */
-    if (cfs_quota >= 0 &&
-        (cfs_quota < 1000 ||
-         cfs_quota > ULLONG_MAX / 1000)) {
-        CGROUP_ERROR("cfs_quota '" << cfs_quota << "' must be in range (1000, " << ULLONG_MAX / 1000 <<")");
-        return -1;
-    }
+    this->ValidateCPUCfsQuota(cfs_quota);
 
     if (cfs_quota == ULLONG_MAX / 1000) {
-        return SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", "max");
+        SetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", "max");
     }
 
-    return SetCgroupValueI64(CGROUP_CONTROLLER_CPU, "cpu.max", cfs_quota);
-}
-
-unsigned long long CgroupBackendV2::GetCpuShares()
-{
-    unsigned long long value;
-    if(GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.weight", &value) < 0)
-        return -1;
-    return value;
+    SetCgroupValueI64(CGROUP_CONTROLLER_CPU, "cpu.max", cfs_quota);
 }
 
 unsigned long long CgroupBackendV2::GetCpuCfsPeriod()
 {
-    std::string str;
-
-    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0)
-        return -1;
+    std::string str = GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max");
 
     std::vector<std::string> strList;
     splitstring(str, strList, " ");
@@ -444,10 +351,7 @@ unsigned long long CgroupBackendV2::GetCpuCfsPeriod()
 
 long long CgroupBackendV2::GetCpuCfsQuota()
 {
-    std::string str;
-
-    if (GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max", &str) < 0)
-        return -1;
+    std::string str = GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max");
     
     if (strncmp(str.c_str(), "max", 3) == 0) {
         return ULLONG_MAX / 1000;
@@ -467,100 +371,33 @@ long long CgroupBackendV2::GetCpuCfsQuota()
 
 ////// Memory //////
 
-int CgroupBackendV2::SetMemoryLimit(const std::string &keylimit, unsigned long long kb)
+void CgroupBackendV2::SetMemoryLimitInKB(const std::string &keylimit, unsigned long long kb)
 {
     unsigned long long maxkb = CGROUP_MEMORY_PARAM_UNLIMITED;
 
     if (kb > maxkb) {
-        CGROUP_ERROR("Memory '" << kb << "' must be less than " << maxkb);
-        return -1;
+        throw CGroupMemoryException("Memory '" + std::to_string(kb) + "' must be less than " + std::to_string(maxkb));
     }
 
     if (kb == maxkb) {
-        return SetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit, "max");
+        SetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit, "max");
     } else {
-        return SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, kb << 10);
+        SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, kb << 10);
     }
 }
 
-int CgroupBackendV2::GetMemoryLimit(const std::string &keylimit, unsigned long long *kb)
+unsigned long long CgroupBackendV2::GetMemoryLimitInKB(const std::string &keylimit)
 {
     unsigned long long value;
-    std::string strval;
+    std::string strval = GetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit);
 
-    if (GetCgroupValueStr(CGROUP_CONTROLLER_MEMORY, keylimit, &strval) < 0)
-        return -1;
+    if (strval == "max")
+        return CGROUP_MEMORY_PARAM_UNLIMITED;
 
-    if (strval == "max") {
-        *kb = CGROUP_MEMORY_PARAM_UNLIMITED;
-        return 0;
-    }
+    value = std::stoull(strval) >> 10;
+    if (value >= CGROUP_MEMORY_PARAM_UNLIMITED)
+        value = CGROUP_MEMORY_PARAM_UNLIMITED;
 
-    value = std::stoull(strval);
-
-    *kb = value >> 10;
-    if (*kb >= CGROUP_MEMORY_PARAM_UNLIMITED)
-        *kb = CGROUP_MEMORY_PARAM_UNLIMITED;
-
-    return 0;
+    return value;
 }
 
-int CgroupBackendV2::SetMemory(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.max", kb);
-}
-int CgroupBackendV2::GetMemoryStat(unsigned long long *cache,
-                        unsigned long long *activeAnon,
-                        unsigned long long *inactiveAnon,
-                        unsigned long long *activeFile,
-                        unsigned long long *inactiveFile,
-                        unsigned long long *unevictable)
-{
-    return 0;
-}
-
-int CgroupBackendV2::GetMemoryUsage(unsigned long *kb)
-{
-    unsigned long long usage_in_bytes;
-    int ret = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY,
-                                   "memory.current", &usage_in_bytes);
-    if (ret == 0)
-        *kb = (unsigned long) usage_in_bytes >> 10;
-    return ret;
-}
-int CgroupBackendV2::SetMemoryHardLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.max", kb);
-}
-int CgroupBackendV2::GetMemoryHardLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.max", kb);
-}
-
-int CgroupBackendV2::SetMemorySoftLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.high", kb);
-}
-
-int CgroupBackendV2::GetMemorySoftLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.high", kb);
-}
-
-int CgroupBackendV2::SetMemSwapHardLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.swap.max", kb);
-}
-int CgroupBackendV2::GetMemSwapHardLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.swap.max", kb);
-}
-int CgroupBackendV2::GetMemSwapUsage(unsigned long long *kb)
-{
-    unsigned long long usage_in_bytes;
-    int ret = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY,
-                                   "memory.swap.current", &usage_in_bytes);
-    if (ret == 0)
-        *kb = (unsigned long) usage_in_bytes >> 10;
-    return ret;
-}

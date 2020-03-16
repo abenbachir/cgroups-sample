@@ -28,4 +28,30 @@ Cgroup::~Cgroup()
 {
 }
 
+void Cgroup::SetOwner(uid_t uid, gid_t gid)
+{
+    backend->SetOwner(uid, gid);
+}
+
+std::shared_ptr<CgroupBackend> Cgroup::GetCgroupBackend()
+{
+    return this->backend;
+}
+
+void Cgroup::SetCPULimitInPercentage(unsigned int hard, unsigned int soft)
+{
+    unsigned long long period = 100;
+    unsigned long long quota = hard;
+    backend->SetCpuCfsQuota(quota * 1000);
+    backend->SetCpuCfsPeriod(period * 1000);
+
+    // backend->SetCpuShares(soft);
+}
+
+void Cgroup::SetMemoryLimitInMB(float hard, float soft)
+{
+    backend->SetMemoryHardLimit(CGROUP_MEM_MB_TO_KB(hard));
+    if (soft > 0)
+        backend->SetMemorySoftLimit(CGROUP_MEM_MB_TO_KB(soft));
+}
 

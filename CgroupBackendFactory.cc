@@ -2,7 +2,7 @@
 #include "Cgroup.hh"
 #include "CgroupBackend.hh"
 #include "CgroupBackendV2.hh"
-#include "CgroupBackendV1.hh"
+// #include "CgroupBackendV1.hh"
 
 #include <unistd.h>
 #include <mntent.h>
@@ -69,7 +69,7 @@ std::shared_ptr<CgroupBackend> CgroupBackendFactory::GetCgroupBackend(const std:
     switch (type)
     {
         case CGROUP_BACKEND_TYPE_V1:
-            backend = std::make_shared<CgroupBackendV1>(path);
+            // backend = std::make_shared<CgroupBackendV1>(path);
             break;
         case CGROUP_BACKEND_TYPE_V2:
             backend = std::make_shared<CgroupBackendV2>(path);

@@ -6,8 +6,6 @@
 #include <string>
 #include "Cgroup.hh"
 #include "CgroupBackend.hh"
-#include "CgroupBackendV1.hh"
-#include "CgroupBackendV2.hh"
 
 namespace mdsd {
 

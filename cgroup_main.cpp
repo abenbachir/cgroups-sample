@@ -113,37 +113,12 @@ int main(int argc, char *argv[])
     uint abder_uid = 1000;
     uint abder_gid = 1000;
     cout <<"Setup cgroup permission for user (" << abder_uid << ", " << abder_gid << ")" << endl;
-    cgroup->backend->SetOwner(abder_uid, abder_gid);
+    cgroup->SetOwner(abder_uid, abder_gid);
+    
+    cgroup->SetCPULimitInPercentage(30);
 
-    // cgroup->backend->Remove();
-    // return 0;
-
-    unsigned long long mem_kb = 0;
-    cgroup->backend->GetMemoryHardLimit(&mem_kb);
-    cout << "   memory.max="<< mem_kb << " KB" << endl;
-
-    // set Memory to hard=20MB soft=10MB
-    cgroup->backend->SetMemoryHardLimit(KB * 70);
-    cgroup->backend->SetMemorySoftLimit(KB * 40);
-
-    mem_kb = 0;
-    cgroup->backend->GetMemoryHardLimit(&mem_kb);
-    cout << "   memory.max="<< mem_kb << " KB" << endl;
-
-    // set CPU to hard limit of 70%
-    cgroup->backend->SetCpuCfsQuota(70000);
-    cgroup->backend->SetCpuCfsPeriod(100000);
-    cout << "   cpu.quota="<< cgroup->backend->GetCpuCfsQuota() << endl;
-    cout << "   cpu.period="<< cgroup->backend->GetCpuCfsPeriod() << endl;
-
-    // Add current process to cgroup
-    // cgroup->backend->AddTask(getpid());
-
-    // memory_alloc(40);
-    // cpu_burn();
-
-    // pid_t mem_process_pid = create_proc_mem_alloc(50);
-    // pid_t cpu_burn_pid = create_proc_cpu_burn();
+    cgroup->SetMemoryLimitInMB(20, 20);
+    
 
     cgroup->backend->AddTask(create_proc_cpu_burn());
     cgroup->backend->AddTask(create_proc_cpu_burn());

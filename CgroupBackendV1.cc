@@ -37,9 +37,19 @@ CGROUP_ENUM_IMPL(CgroupV1Controller,
               "freezer", "blkio", "net_cls", "pids", "rdma", "perf_event", "name=systemd"
 );
 
+CGROUP_ENUM_IMPL(CgroupV1ControllerFile,
+              CGROUP_CONTROLLER_FILE_LAST,
+              "tasks", "cgroup.threads",
+              "cpuacct.usage", "cpu.shares", "cpu.cfs_period_us", "cpu.cfs_quota_us",
+              "memory.usage_in_bytes", "memory.limit_in_bytes", "memory.soft_limit_in_bytes",
+              "memory.memsw.usage_in_bytes", "memory.memsw.limit_in_bytes", "memory.memsw.soft_limit_in_bytes",
+);
+
 CgroupBackendV1::CgroupBackendV1(const std::string &placement)
     : placement(placement), CgroupBackend(CGROUP_BACKEND_TYPE_V1, placement)
 {
+    for (size_t i = 0; i < CGROUP_CONTROLLER_FILE_LAST; i++)
+        backendControllerFileMap[GetBackendType()][i] = CgroupV1ControllerFileTypeToString(i);
 }
 
 std::string CgroupBackendV1::GetBasePath(int controller)
@@ -50,15 +60,19 @@ std::string CgroupBackendV1::GetBasePath(int controller)
     return base;
 }
 
+std::string CgroupBackendV1::GetControllerName(int controller)
+{
+    return CgroupV1ControllerTypeToString(controller);
+}
 
 void CgroupBackendV1::Init()
 {
     CgroupBackend::Init();
     CGROUP_DEBUG("this->placement="+this->placement);
     for (size_t i = CGROUP_CONTROLLER_CPU; i < CGROUP_CONTROLLER_LAST; i++) {
-        auto controllerName = CgroupV1ControllerTypeToString(i);
+        auto controllerName = GetControllerName(i);
         auto mountPoint = this->controllers[i].mountPoint;
-
+        // TODO: refine this, this logic will not work all the time
         this->controllers[i].placement = this->placement;
         if (this->placement.substr(0, mountPoint.size()) == mountPoint) {
             this->controllers[i].placement = this->placement.substr(mountPoint.size());
@@ -91,7 +105,7 @@ int CgroupBackendV1::DetectMounts(const char *mntType, const char *mntOpts, cons
 
     for (size_t i = CGROUP_CONTROLLER_CPU; i < CGROUP_CONTROLLER_LAST; i++)
     {
-         auto typestr = CgroupV1ControllerTypeToString(i);
+         auto typestr = GetControllerName(i);
 
         if (MountOptsMatchController(std::string(mntOpts), typestr)) {
             /* Note that the lines in /proc/mounts have the same
@@ -126,7 +140,7 @@ int CgroupBackendV1::DetectPlacement(const std::string &path,
 {
     // CGROUP_DEBUG("path=%s controllers=%s selfpath=%s\n", path.c_str(), controllers.c_str(), selfpath.c_str());
    for (size_t i = CGROUP_CONTROLLER_CPU; i < CGROUP_CONTROLLER_LAST; i++) {
-        auto typestr = CgroupV1ControllerTypeToString(i);
+        auto typestr = GetControllerName(i);
 
         if (MountOptsMatchController(controllers, typestr) &&
             !this->controllers[i].mountPoint.empty() &&
@@ -153,7 +167,7 @@ int CgroupBackendV1::ValidatePlacement()
     return 0;
 }
 
-int CgroupBackendV1::AddTask(pid_t pid, unsigned int taskflags)
+void CgroupBackendV1::AddTask(pid_t pid, unsigned int taskflags)
 {
     for (size_t i = CGROUP_CONTROLLER_CPU; i < CGROUP_CONTROLLER_LAST; i++) {
         /* Skip over controllers not mounted */
@@ -169,37 +183,24 @@ int CgroupBackendV1::AddTask(pid_t pid, unsigned int taskflags)
         if (i == CGROUP_CONTROLLER_SYSTEMD && !(taskflags & CGROUP_TASK_SYSTEMD))
             continue;
 
-        if (SetCgroupValueI64(i, "tasks", pid) < 0)
-            return -1;
+        SetCgroupValueI64(i, "tasks", pid);
     }
 }
 
-int CgroupBackendV1::HasEmptyTasks(int controller)
+bool CgroupBackendV1::HasEmptyTasks(int controller)
 {
-    int ret = -1;
-    std::string content;
+    if (GetCgroupValueStr(controller, "tasks") == "")
+        return false;
 
-    ret = GetCgroupValueStr(controller, "tasks", &content);
-
-    if (ret == 0 && content == "")
-        ret = 1;
-
-    return ret;
+    return true;
 }
 
-int CgroupBackendV1::SetOwner(uid_t uid, gid_t gid, int controllers)
-{
-    return 0;
-}
-
-int CgroupBackendV1::Remove()
+void CgroupBackendV1::Remove()
 { 
-    return 0;
 }
 
-int CgroupBackendV1::MakeGroup(unsigned int flags)
+void CgroupBackendV1::MakeGroup(unsigned int flags)
 {
-    return 0;
 }
 
 int CgroupBackendV1::DetectControllers(int controllers, int alreadyDetected = 0)
@@ -213,87 +214,45 @@ bool CgroupBackendV1::HasController(int controller)
     return this->controllers[controller].mountPoint != "";
 }
 
-int CgroupBackendV1::GetPathOfController(int controller, const std::string &key, std::string *path)
+std::string CgroupBackendV1::GetPathOfController(int controller, const std::string &key)
 {
-    if (controller != CGROUP_CONTROLLER_NONE && !HasController(controller)) {
-        CGROUP_ERROR("Controller '" << CgroupV1ControllerTypeToString(controller) << "' is not available");
-        return -1;
-    }
+    if (controller != CGROUP_CONTROLLER_NONE && !HasController(controller))
+        throw CGroupControllerNotFoundException("Controller '" + GetControllerName(controller) + "' is not available");
 
-    if (this->controllers[controller].placement  == "") {
-        CGROUP_ERROR(GetBackendName() + " controller '" << CgroupV1ControllerTypeToString(controller) << "' is not enabled for group");
-        return -1;
-    }
+    if (this->controllers[controller].placement  == "")
+        throw CGroupControllerNotFoundException(GetBackendName() + " controller '" +
+                GetControllerName(controller) + "' is not enabled for group");
 
     fs::path buildPath(this->GetBasePath(controller));
     buildPath /= key;
 
-    *path = buildPath;
-
-    return 0;
+    return buildPath;
 }
 
 
 //////  CPU   //////
 
-
-int CgroupBackendV1::SetCpuShares(unsigned long long shares)
+void CgroupBackendV1::SetCpuCfsPeriod(unsigned long long cfs_period)
 {
-    return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.shares", shares);
+    this->ValidateCPUCfsPeiod(cfs_period);
+
+    SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_period_us", cfs_period);
 }
 
-int CgroupBackendV1::SetCpuCfsPeriod(unsigned long long cfs_period)
+void CgroupBackendV1::SetCpuCfsQuota(long long cfs_quota)
 {
-    std::string str;
-
-    /* The cfs_period should be greater or equal than 1ms, and less or equal
-     * than 1s.
-     */
-    if (cfs_period < 1000 || cfs_period > 1000000) {
-        CGROUP_ERROR("cfs_period '" << cfs_period << "' must be in range (1000, 1000000)");
-        return -1;
-    }
-
-    return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_period_us", cfs_period);
-}
-
-int CgroupBackendV1::SetCpuCfsQuota(long long cfs_quota)
-{
-    /* The cfs_quota should be greater or equal than 1ms */
-    if (cfs_quota >= 0 &&
-        (cfs_quota < 1000 ||
-         cfs_quota > ULLONG_MAX / 1000)) {
-        CGROUP_ERROR("cfs_quota '" << cfs_quota << "' must be in range (1000, " << ULLONG_MAX / 1000 <<")");
-        return -1;
-    }
-
-   return SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_quota_us", cfs_quota);
-}
-
-unsigned long long CgroupBackendV1::GetCpuShares()
-{
-    unsigned long long value;
-    if(GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.shares", &value) < 0)
-        return -1;
-    return value;
+    this->ValidateCPUCfsQuota(cfs_quota);
+    SetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_quota_us", cfs_quota);
 }
 
 unsigned long long CgroupBackendV1::GetCpuCfsPeriod()
 {
-    unsigned long long value;
-    if(GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_period_us", &value) < 0)
-        return -1;
-
-    return value;
+    return GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_period_us");
 }
 
 long long CgroupBackendV1::GetCpuCfsQuota()
 {
-    unsigned long long value;
-    if(GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_quota_us", &value) < 0)
-        return -1;
-
-    return value;
+    return GetCgroupValueU64(CGROUP_CONTROLLER_CPU, "cpu.cfs_quota_us");
 }
 
 
@@ -326,92 +285,29 @@ void CgroupBackendV1::MemoryInit()
     }
 }
 
-int CgroupBackendV1::SetMemoryLimit(const std::string &keylimit, unsigned long long kb)
+void CgroupBackendV1::SetMemoryLimitInKB(const std::string &keylimit, unsigned long long kb)
 {
     unsigned long long maxkb = CGROUP_MEMORY_PARAM_UNLIMITED;
 
     if (kb > maxkb) {
-        CGROUP_ERROR("Memory '" << kb << "' must be less than " << maxkb);
-        return -1;
+        throw CGroupMemoryException("Memory '" + std::to_string(kb) + "' must be less than " + std::to_string(maxkb));
     }
 
     if (kb == maxkb) {
-        return SetCgroupValueI64(CGROUP_CONTROLLER_MEMORY, keylimit, -1);
+        SetCgroupValueI64(CGROUP_CONTROLLER_MEMORY, keylimit, -1);
     } else {
-        return SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, kb << 10);
+        SetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, kb << 10);
     }
 }
 
-int CgroupBackendV1::GetMemoryLimit(const std::string &keylimit, unsigned long long *kb)
+unsigned long long CgroupBackendV1::GetMemoryLimitInKB(const std::string &keylimit)
 {
-    long long unsigned int limit_in_bytes;
+    long long unsigned int kb = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit) >> 10;
 
-    if (GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY, keylimit, &limit_in_bytes) < 0)
-        return -1;
+    if (kb >= memoryUnlimitedKB)
+        kb = CGROUP_MEMORY_PARAM_UNLIMITED;
 
-    *kb = limit_in_bytes >> 10;
-    if (*kb >= memoryUnlimitedKB)
-        *kb = CGROUP_MEMORY_PARAM_UNLIMITED;
-
-    return 0;
+    return kb;
 }
 
-int CgroupBackendV1::SetMemory(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.max", kb);
-}
-int CgroupBackendV1::GetMemoryStat(unsigned long long *cache,
-                        unsigned long long *activeAnon,
-                        unsigned long long *inactiveAnon,
-                        unsigned long long *activeFile,
-                        unsigned long long *inactiveFile,
-                        unsigned long long *unevictable)
-{
-    return 0;
-}
 
-int CgroupBackendV1::GetMemoryUsage(unsigned long *kb)
-{
-    unsigned long long usage_in_bytes;
-    int ret = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY,
-                                   "memory.usage_in_bytes", &usage_in_bytes);
-    if (ret == 0)
-        *kb = (unsigned long) usage_in_bytes >> 10;
-    return ret;
-}
-int CgroupBackendV1::SetMemoryHardLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.limit_in_bytes", kb);
-}
-int CgroupBackendV1::GetMemoryHardLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.limit_in_bytes", kb);
-}
-
-int CgroupBackendV1::SetMemorySoftLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.soft_limit_in_bytes", kb);
-}
-
-int CgroupBackendV1::GetMemorySoftLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.soft_limit_in_bytes", kb);
-}
-
-int CgroupBackendV1::SetMemSwapHardLimit(unsigned long long kb)
-{
-    return SetMemoryLimit("memory.memsw.limit_in_bytes", kb);
-}
-int CgroupBackendV1::GetMemSwapHardLimit(unsigned long long *kb)
-{
-    return GetMemoryLimit("memory.memsw.limit_in_bytes", kb);
-}
-int CgroupBackendV1::GetMemSwapUsage(unsigned long long *kb)
-{
-    unsigned long long usage_in_bytes;
-    int ret = GetCgroupValueU64(CGROUP_CONTROLLER_MEMORY,
-                                   "memory.memsw.usage_in_bytes", &usage_in_bytes);
-    if (ret == 0)
-        *kb = (unsigned long) usage_in_bytes >> 10;
-    return ret;
-}
