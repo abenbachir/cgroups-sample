@@ -12,12 +12,16 @@ struct _CgroupBackendV1Controller {
     std::string mountPoint;
     std::string linkPoint;
     std::string placement;
+    CgroupController controller;
 
     bool PlacementExist() { 
         fs::path path(mountPoint);
         path /= placement;
         return fs::exists(path);
     }
+
+    bool Enabled() { return placement != "" && placement != "/"; }
+    void Print() { CGROUP_DEBUG("controller=" << controller<< " mountPoint="<<mountPoint << " placement=" << placement); }
 };
 typedef struct _CgroupBackendV1Controller CgroupBackendV1Controller;
 
@@ -37,8 +41,9 @@ public:
 
     virtual void Remove();
     virtual void MakeGroup(unsigned int flags = CGROUP_NONE);
+    virtual void SetOwner(uid_t uid, gid_t gid, int controllers);
 
-    virtual int DetectControllers(int controllers, int alreadyDetected);
+    virtual int DetectControllers(int controllers, int alreadyDetected = CGROUP_CONTROLLER_NONE);
     virtual bool HasController(int controller = 0);
     virtual std::string GetPathOfController(int controller, const std::string &key);
 
@@ -50,6 +55,7 @@ public:
 
 // helpers
     virtual std::string GetBasePath(int controller = CGROUP_CONTROLLER_NONE);
+    virtual std::string GetRelativeBasePath(int controller = CGROUP_CONTROLLER_NONE);
 
 protected:
     virtual void SetMemoryLimitInKB(const std::string &keylimit, unsigned long long kb);
@@ -61,7 +67,7 @@ protected:
     virtual std::string GetControllerName(int controller);
 
 private:
-    const std::string placement;
+    std::string placement;
     unsigned long long int memoryUnlimitedKB = CGROUP_MEMORY_PARAM_UNLIMITED;
     CgroupBackendV1Controller controllers[CGROUP_CONTROLLER_LAST];
 };

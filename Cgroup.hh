@@ -5,28 +5,32 @@
 #include <memory>
 #include <string>
 #include "CgroupBackend.hh"
+#include "CgroupDef.hh"
 
 namespace mdsd {
 
-#define CGROUP_MAX_VAL 512
-#define CGROUP_MEM_MB_TO_BYTES(val) val * 1024 * 1024
-#define CGROUP_MEM_MB_TO_KB(val) val * 1024
-#define CGROUP_MEM_KB_TO_BYTES(val) val * 1024
 class Cgroup
 {
 public:
     Cgroup(const std::shared_ptr<CgroupBackend>& backend);
     ~Cgroup();
 
-    void SetCPULimitInPercentage(unsigned int hard, unsigned int soft = 0);
-    void SetMemoryLimitInMB(float hard, float soft = 0);
-
+    void SetCPULimitInPercentage(unsigned int cpu, unsigned int softquota = 0);
+    void SetMemoryLimitInMB(float memory, unsigned int softquota = 0);
     void SetOwner(uid_t uid, gid_t gid);
     std::shared_ptr<CgroupBackend> GetCgroupBackend();
     std::shared_ptr<CgroupBackend> backend;
+
+    unsigned long long GetMemoryInMB()
+    {
+        return CGROUP_MEM_KB_TO_MB(backend->GetMemoryHardLimit());
+    }
+
+    unsigned int GetCPUInPercent()
+    {
+        return 100 * double(backend->GetCpuCfsQuota())/backend->GetCpuCfsPeriod();
+    }
 private:
-    const std::string cgpath;
-    
     
 };
 

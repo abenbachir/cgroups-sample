@@ -1,5 +1,5 @@
 #include "CgroupBackend.hh"
-#include "Enum.hh"
+#include "EnumToString.hh"
 
 #include <unistd.h>
 #include <mntent.h>
@@ -24,12 +24,14 @@
 #include <functional> 
 #include <cctype>
 #include <locale>
-
+#include <boost/algorithm/string.hpp>
 
 using namespace mdsd;
+using namespace std;
+using namespace boost::algorithm;
 namespace fs = std::experimental::filesystem;
 
-std::string CgroupBackend::backendControllerFileMap[CGROUP_BACKEND_TYPE_LAST-1][CGROUP_CONTROLLER_FILE_LAST];
+std::string CgroupBackend::backendControllerFileMap[CGROUP_BACKEND_TYPE_LAST][CGROUP_CONTROLLER_FILE_LAST];
 /* this should match the enum CgroupController */
 CGROUP_ENUM_DECL(CgroupBackendType);
 CGROUP_ENUM_IMPL(CgroupBackendType, CGROUP_BACKEND_TYPE_LAST, "none", "cgroup2", "cgroup");
@@ -62,6 +64,11 @@ CgroupBackendType CgroupBackend::GetBackendType()
 std::string CgroupBackend::GetControllerFileName(int controllerFileType)
 {
     return CgroupBackend::backendControllerFileMap[this->backendType][controllerFileType];
+}
+
+std::string CgroupBackend::GetRelativePlacement(const std::string& placement)
+{
+    return replace_all_copy(placement, this->CGROUP_ROOT_PATH, "");
 }
 
 /* We're looking for one 'cgroup' fs mount */
@@ -120,7 +127,7 @@ int CgroupBackend::DetectMounts()
 
     mounts = fopen(PROC_MOUNTS_PATH, "r");
     if (mounts == NULL) {
-        CGROUP_DEBUG("errno=" << errno <<" Unable to open " << PROC_MOUNTS_PATH);
+        CGROUP_ERROR("errno=" << errno <<" Unable to open " << PROC_MOUNTS_PATH);
         return -1;
     }
 
@@ -144,16 +151,52 @@ int CgroupBackend::DetectMounts()
     return ret;
 }
 
+/*
+12:freezer:/
+11:memory:/system.slice/mdsdmgr.service
+10:cpuset:/
+9:rdma:/
+8:hugetlb:/
+7:perf_event:/
+6:net_cls,net_prio:/
+5:blkio:/system.slice/mdsdmgr.service
+4:devices:/system.slice/mdsdmgr.service
+3:pids:/system.slice/mdsdmgr.service
+2:cpu,cpuacct:/system.slice/mdsdmgr.service
+1:name=systemd:/system.slice/mdsdmgr.service
+0::/system.slice/mdsdmgr.service
+*/
+void CgroupBackend::DetectPlacement(pid_t pid, const std::string &path)
+{
+    std::string procfile = "/proc/self/cgroup";
+
+    if (pid != -1)
+        procfile = "/proc/" + to_string(pid) + "/cgroup";
+
+    std::ifstream file(procfile);
+    std::string line;
+    while (std::getline(file, line))
+    {
+        std::vector<std::string> splitLine;
+        split(splitLine, line, is_any_of(":"));
+        auto controllers = splitLine[1];
+        auto selfpath = splitLine[2];
+
+        this->DetectPlacement(path, controllers, selfpath);
+    }
+}
+
 bool CgroupBackend::HasEmptyTasks(int controller)
 {
-    return false;
+    return true;
 }
 
 // should be probably virtual pure
 void CgroupBackend::SetOwner(uid_t uid, gid_t gid, int controllers)
 {
     auto base = this->GetBasePath(controllers);
-    
+    // CGROUP_DEBUG("SetOwner(): base=" << base);
+
     // Change ownership of all regular files in a directory. 
     for (const auto & entry : fs::directory_iterator(base))
     {
@@ -171,6 +214,11 @@ void CgroupBackend::SetOwner(uid_t uid, gid_t gid, int controllers)
     }
 }
 
+
+int CgroupBackend::DetectControllers(int controllers, int alreadyDetected)
+{
+    return 0;
+}
 
 void CgroupBackend::SetCgroupValueU64(int controller, const std::string& key, unsigned long long int value)
 {
@@ -191,7 +239,7 @@ void CgroupBackend::SetCgroupValueStr(int controller, const std::string& key, co
 
 void CgroupBackend::SetCgroupValueRaw(const std::string &path, const std::string& value)
 {
-    CGROUP_DEBUG("Set value '" << path <<"' to '" << value << "'");
+    // CGROUP_DEBUG("Set value '" << path <<"' to '" << value << "'");
     FileWriteStr(path, value);
 
     const char* tmp = std::strrchr(path.c_str(), '/');
@@ -216,7 +264,7 @@ std::string CgroupBackend::GetCgroupValueStr(int controller, const std::string &
 
 std::string CgroupBackend::GetCgroupValueRaw(const std::string &path)
 {
-    CGROUP_DEBUG("Get value " << path);
+    // CGROUP_DEBUG("Get value " << path);
     std::string value = FileReadAll(path);
 
     /* Terminated with '\n' has sometimes harmful effects to the caller */
@@ -254,37 +302,6 @@ void CgroupBackend::FileWriteStr(const std::string &path, const std::string &buf
     std::ofstream file(path, std::fstream::out);
     file << buffer;
     file.close();
-}
-
-// trim from start (in place)
-inline void CgroupBackend::ltrim(std::string &s) {
-    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
-            std::not1(std::ptr_fun<int, int>(std::isspace))));
-}
-
-// trim from end (in place)
-inline void CgroupBackend::rtrim(std::string &s) {
-    s.erase(std::find_if(s.rbegin(), s.rend(),
-            std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
-}
-
-// trim from both ends (in place)
-inline void CgroupBackend::trim(std::string &s) {
-    ltrim(s);
-    rtrim(s);
-}
-
-void CgroupBackend::splitstring(const std::string& str,
-        std::vector<std::string>& container, const std::string& delims)
-{
-    std::size_t current, previous = 0;  
-    current = str.find_first_of(delims);
-    while (current != std::string::npos) {
-        container.push_back(str.substr(previous, current - previous));
-        previous = current + 1;
-        current = str.find_first_of(delims, previous);
-    }
-    container.push_back(str.substr(previous, current - previous));
 }
 
 std::string CgroupBackend::serialize_fileperms(const fs::perms &p)

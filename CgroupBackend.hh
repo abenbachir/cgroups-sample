@@ -4,19 +4,17 @@
 
 #include <memory>
 #include <string>
+#include "CgroupDef.hh"
 
 #include <experimental/filesystem> // TODO: remove 'experimental'
+#include <boost/algorithm/string.hpp>
 
+using namespace boost::algorithm;
 namespace fs = std::experimental::filesystem;
 
 namespace mdsd {
 
-#define CGROUP_MAX_VAL 512
-#define CGROUP_MEMORY_PARAM_UNLIMITED 9007199254740991LL /* = INT64_MAX >> 10 */
-#define CGROUP_DEBUG(log) std::cout << log << std::endl
-#define CGROUP_ERROR(error) std::cerr << "ERROR: " << error << std::endl
-
-enum {
+typedef enum {
     CGROUP_CONTROLLER_NONE = 0,
     CGROUP_CONTROLLER_CPU,
     CGROUP_CONTROLLER_CPUACCT,
@@ -131,6 +129,7 @@ public:
     virtual CgroupBackendType GetBackendType();
 
     virtual int DetectMounts(const char *mntType, const char *mntOpts, const char *mntDir)  = 0;
+    virtual void DetectPlacement(pid_t pid = -1, const std::string &path = "");
     virtual int DetectPlacement(const std::string &path, const std::string &controllers, const std::string &selfpath)  = 0;
     virtual int ValidatePlacement()  = 0;
 
@@ -142,7 +141,7 @@ public:
     virtual void MakeGroup(unsigned int flags = CGROUP_NONE) = 0;
 
 
-    int DetectControllers(int controllers, int alreadyDetected);
+    virtual int DetectControllers(int controllers, int alreadyDetected = CGROUP_CONTROLLER_NONE);
     virtual bool HasController(int controller = CGROUP_CONTROLLER_NONE) = 0;
     virtual std::string GetPathOfController(int controller, const std::string &key) = 0;
 
@@ -188,19 +187,11 @@ public:
 
 // helpers
     virtual std::string GetBasePath(int controller = CGROUP_CONTROLLER_NONE) = 0;
+    virtual std::string GetRelativeBasePath(int controller = CGROUP_CONTROLLER_NONE) = 0;
     virtual std::string GetControllerFileName(int controllerFileType);
-
-    
+    virtual std::string GetRelativePlacement(const std::string& placement);
 
 protected:
-        // trim from start (in place)
-    virtual void ltrim(std::string &s);
-    // trim from end (in place)
-    virtual void rtrim(std::string &s);
-    // trim from both ends (in place)
-    virtual void trim(std::string &s);
-    virtual void splitstring(const std::string& str,
-        std::vector<std::string>& container, const std::string& delims = " ");
 
     virtual std::string serialize_fileperms(const fs::perms &p);
     virtual std::string GetControllerName(int controller) = 0;
@@ -212,9 +203,9 @@ protected:
     const CgroupBackendType backendType = CGROUP_BACKEND_NONE;
     std::string backenName;
     const char* PROC_MOUNTS_PATH = "/proc/mounts";
-    std::string mountPoint;
+    const std::string CGROUP_ROOT_PATH = "/sys/fs/cgroup/";
 
-    static std::string backendControllerFileMap[CGROUP_BACKEND_TYPE_LAST-1][CGROUP_CONTROLLER_FILE_LAST];
+    static std::string backendControllerFileMap[CGROUP_BACKEND_TYPE_LAST][CGROUP_CONTROLLER_FILE_LAST];
 };
 
 } // namespace mdsd

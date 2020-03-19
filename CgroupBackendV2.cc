@@ -1,5 +1,5 @@
 #include "CgroupBackendV2.hh"
-#include "Enum.hh"
+#include "EnumToString.hh"
 
 #include <unistd.h>
 #include <mntent.h>
@@ -58,6 +58,11 @@ std::string CgroupBackendV2::GetBasePath(int controller)
     base /= this->placement;
 
     return base;
+}
+
+std::string CgroupBackendV2::GetRelativeBasePath(int controller)
+{  
+    return this->placement;
 }
 
 bool CgroupBackendV2::IsCgroupCreated()
@@ -211,7 +216,7 @@ void CgroupBackendV2::MakeGroup(unsigned int flags)
     auto parent = CgroupBackendV2(path.parent_path());
     parent.ParseControllersFile();
 
-    for (size_t controller = 0; controller < CGROUP_CONTROLLER_LAST; controller++)
+    for (size_t controller = CGROUP_CONTROLLER_CPU; controller < CGROUP_CONTROLLER_LAST; controller++)
     {
         // if parent does not have the controller, then skip
         if (!parent.HasController(controller) || this->HasController(controller))
@@ -250,7 +255,7 @@ int CgroupBackendV2::ParseControllersFile()
 
     CGROUP_DEBUG("Parsing controlers from path " << controllerFile << " => '" << controllerStr << "'");
     trim(controllerStr);
-    splitstring(controllerStr, controllerList);
+    split(controllerList, controllerStr, boost::is_any_of(" "));
 
     if (controllerList.empty())
         return -1;
@@ -268,7 +273,7 @@ int CgroupBackendV2::ParseControllersFile()
 }
 
 
-int CgroupBackendV2::DetectControllers(int controllers, int alreadyDetected = 0)
+int CgroupBackendV2::DetectControllers(int controllers, int alreadyDetected)
 {
     size_t i;
 
@@ -281,7 +286,7 @@ int CgroupBackendV2::DetectControllers(int controllers, int alreadyDetected = 0)
 
     this->controllers &= ~alreadyDetected;
 
-    for (i = 0; i < CGROUP_CONTROLLER_LAST; i++)
+    for (i = CGROUP_CONTROLLER_CPU; i < CGROUP_CONTROLLER_LAST; i++)
         CGROUP_DEBUG("Controller '"<< GetControllerName(i) <<"' present=" << ((this->controllers & 1 << i) ? "yes" : "no"));
 
     return this->controllers;
@@ -314,7 +319,7 @@ void CgroupBackendV2::SetCpuCfsPeriod(unsigned long long cfs_period)
     std::string str = GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max");
 
     std::vector<std::string> strList;
-    splitstring(str, strList, " ");
+    split(strList, str, is_any_of(" "));
     if (strList.size() <= 1)
         throw CGroupCPUException("Invalid 'cpu.max' data.");
 
@@ -339,7 +344,7 @@ unsigned long long CgroupBackendV2::GetCpuCfsPeriod()
     std::string str = GetCgroupValueStr(CGROUP_CONTROLLER_CPU, "cpu.max");
 
     std::vector<std::string> strList;
-    splitstring(str, strList, " ");
+    split(strList, str, is_any_of(" "));
 
     if (strList.size() <= 1) {
         CGROUP_ERROR("Invalid 'cpu.max' data.");
@@ -358,7 +363,7 @@ long long CgroupBackendV2::GetCpuCfsQuota()
     }
 
     std::vector<std::string> strList;
-    splitstring(str, strList, " ");
+    split(strList, str, is_any_of(" "));
 
     if (strList.size() <= 1) {
         CGROUP_ERROR("Invalid 'cpu.max' data.");

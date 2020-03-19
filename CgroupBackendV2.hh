@@ -29,7 +29,7 @@ public:
 
 
     int ParseControllersFile();
-    virtual int DetectControllers(int controllers, int alreadyDetected);
+    virtual int DetectControllers(int controllers, int alreadyDetected = CGROUP_CONTROLLER_NONE);
     virtual bool HasController(int controller = 0);
     virtual std::string GetPathOfController(int controller, const std::string &key);
 
@@ -41,6 +41,7 @@ public:
 
 // helpers
     virtual std::string GetBasePath(int controller = CGROUP_CONTROLLER_NONE);
+    virtual std::string GetRelativeBasePath(int controller = CGROUP_CONTROLLER_NONE);
     virtual bool IsCgroupCreated();
 protected:
     virtual void SetMemoryLimitInKB(const std::string &keylimit, unsigned long long kb);
@@ -49,6 +50,7 @@ protected:
 
 private:
     std::string placement;
+    std::string mountPoint;
     int controllers;
 };
 
